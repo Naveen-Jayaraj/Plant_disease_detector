@@ -75,12 +75,14 @@
             <input type="radio" name="tabs" id="tab1" class="tab-radio" checked/>
             <label for="tab1" class="tab-label">📖 Definition</label>
             <div class="tab-content card">
+              {# This tab's structure still works with the new API response #}
               {% if results.definition.status == 'success' %}
                 <p class="def-success">{{ results.definition.message }}</p>
               {% elif results.definition.status == 'info' %}
                 <p class="def-info">{{ results.definition.message }}</p>
               {% else %}
-                <strong>{{ results.definition.title }}</strong> — {{ results.definition.summary }}
+                <strong>{{ results.definition.title }}</strong>
+                <p>{{ results.definition.summary | safe }}</p> 
                 {% if results.definition.source %}
                   <p class="caption">Source: {{ results.definition.source }}</p>
                 {% endif %}
@@ -88,17 +90,23 @@
             </div>
 
             <input type="radio" name="tabs" id="tab2" class="tab-radio"/>
-            <label for="tab2" class="tab-label">🧯 Care Guide</label>
+            <label for="tab2" class="tab-label">💡 Cause & Solution</label>
             <div class="tab-content card">
-              <h3>Actionable Tips</h3>
-              <ul>
-                {% for tip in results.care_guide %}
-                  <li>{{ tip | safe }}</li>
-                {% endfor %}
-              </ul>
-              <p class="caption">Follow local advisories and product labels.</p>
+              <h3>Analysis & Recommendations</h3>
+              
+              {# The solution_guide is now a list of objects #}
+              {% for item in results.solution_guide %}
+                <div class="solution-item">
+                  <strong>Cause:</strong>
+                  <p>{{ item.cause | safe }}</p>
+                  <strong>Solution:</strong>
+                  <p>{{ item.remedy | safe }}</p>
+                </div>
+                {% if not loop.last %}<div class="divider"></div>{% endif %}
+              {% endfor %}
+              
+              <p class="caption">Always follow local agricultural advisories and product labels.</p>
             </div>
-
             <input type="radio" name="tabs" id="tab3" class="tab-radio"/>
             <label for="tab3" class="tab-label">🔎 Details</label>
             <div class="tab-content card">
@@ -171,7 +179,7 @@
         }
       });
       
-      // --- NEW: File input indicator logic ---
+      // --- File input indicator logic (existing) ---
       var fileInput = document.getElementById('plant_image');
       var fileLabel = document.querySelector('.file-input-label');
       
@@ -179,7 +187,7 @@
         var defaultLabelText = fileLabel.innerHTML; // Store original text
 
         fileInput.addEventListener('change', function(e) {
-          if (e.target.files && e.target.files.length > 0) {
+          if (e.gittarget.files && e.target.files.length > 0) {
             // A file was selected
             var fileName = e.target.files[0].name;
             fileLabel.innerHTML = '✅ ' + fileName; // Update text with file name
@@ -191,8 +199,6 @@
           }
         });
       }
-      // --- End of new logic ---
-
     })();
   </script>
 </body>

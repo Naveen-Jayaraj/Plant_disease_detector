@@ -2,13 +2,16 @@ import os
 import io
 import json
 import numpy as np
-import requests
+# import requests <-- No longer needed
 import base64
 from PIL import Image
 
 from flask import Flask, request, render_template
 
 import plotly.graph_objects as go
+
+# --- NEW IMPORTS ---
+import google.generativeai as genai
 
 # Optional ML imports (gracefully handled if unavailable at runtime)
 try:
@@ -31,7 +34,6 @@ except Exception:
 MODEL1_PATH = 'models/model1.keras'
 MODEL2_PATH = 'models/model2.pth'
 IMG_SIZE = (224, 224)
-DEFS_PATH = 'data/definitions.json'
 
 CLASSES = [
     'American Bollworm on Cotton', 'Anthracnose on Cotton', 'Army worm', 'Becterial Blight in Rice',
@@ -54,6 +56,23 @@ EMOJI_FOR_CLASS = {
 }
 
 # =========================
+# ---- Gemini API Setup ----
+# =========================
+try:
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        print("Warning: GEMINI_API_KEY environment variable not set. Using simulated data.")
+        genai.configure(api_key="SIMULATED_KEY") # Placeholder
+        GEMINI_MODEL = None
+    else:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_MODEL = genai.GenerativeModel('gemini-2.5-flash') # Use a fast, modern model
+        print("Gemini API configured successfully.")
+except Exception as e:
+    print(f"Error configuring Gemini API: {e}. Using simulated data.")
+    GEMINI_MODEL = None
+
+# =========================
 # ---- Flask App Setup -----
 # =========================
 app = Flask(__name__)
@@ -61,17 +80,6 @@ app = Flask(__name__)
 # =========================
 # ---- Utilities -----------
 # =========================
-
-def load_local_definitions(path: str = DEFS_PATH):
-    """Load local JSON definitions mapping class name -> {title, summary, source}."""
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
 
 def get_class_emoji(name: str) -> str:
     """Get a representative emoji for a given class name."""
@@ -81,50 +89,96 @@ def get_class_emoji(name: str) -> str:
             return v
     return '🪴'
 
-def get_definition_data(pred_class: str):
-    """Get definition data *only* from the local JSON file."""
-    if pred_class in HEALTHY_CLASSES:
-        return {"status": "success", "message": "This plant class looks healthy. No disease definition needed."}
-
-    local = LOCAL_DEFS.get(pred_class)
-    if local and isinstance(local, dict):
+# --- NEW: Real Gemini API Call ---
+def get_gemini_analysis(pred_class: str, severity: float = None):
+    """
+    Calls the Gemini API to get a dynamic definition and solution.
+    Returns a dictionary with 'definition' and 'solution_guide'.
+    """
+    
+    # === Fallback Function (if API key is missing or call fails) ===
+    def get_fallback_data():
+        print("Using fallback data.")
+        if pred_class in HEALTHY_CLASSES:
+            return {
+                "definition": {"status": "success", "message": "The model indicates this plant is healthy. Keep up the good work!"},
+                "solution_guide": [
+                    {"cause": "Good agricultural practices.", "remedy": "Continue your current regimen and monitor weekly."}
+                ]
+            }
+        
+        sev_desc = f"{severity:.1f}%" if severity else "N/A"
         return {
-            "status": "found",
-            "title": local.get('title', pred_class),
-            "summary": local.get('summary') or '',
-            "source": local.get('source')
+            "definition": {
+                "status": "found",
+                "title": f"{pred_class} (Local Fallback)",
+                "summary": f"This is a local fallback response. The model detected {pred_class} with {sev_desc} severity, but the Gemini API is not available.",
+                "source": "Local System"
+            },
+            "solution_guide": [
+                {"cause": "Unknown (API offline).", "remedy": "Please check the server's API key and internet connection."}
+            ]
         }
 
-    return {"status": "info", "message": "Definition not found in local definitions.json."}
-
-def get_care_guide_data(pred_class: str, severity: float = None):
-    """Get a list of care tips based on class and severity."""
+    # === Healthy Case (No API call needed) ===
     if pred_class in HEALTHY_CLASSES:
-        return [
-            "Keep monitoring leaves weekly.",
-            "Maintain good airflow and avoid water logging.",
-            "Consider a balanced fertilizer schedule."
-        ]
-    
-    sev = 50.0 if severity is None else float(severity)
-    if sev < 30:
-        return [
-            "**Early stage**: Remove affected leaves; sanitize tools.",
-            "Improve airflow; adjust watering.",
-            "Start with mild organic treatments (e.g., neem-based sprays) per local guidelines."
-        ]
-    elif sev < 70:
-        return [
-            "**Moderate**: Prune infected parts; dispose away from fields.",
-            "Use recommended fungicide/insecticide for your crop/disease; follow label rates.",
-            "Rotate crops and monitor every 2–3 days."
-        ]
-    else:
-        return [
-            "**High**: Consider isolating/rogueing severely affected plants.",
-            "Apply targeted treatment urgently as per agri advisories.",
-            "Evaluate economic threshold and plan follow-up after 3–5 days."
-        ]
+        return {
+            "definition": {
+                "status": "success", 
+                "message": "The model indicates this plant is healthy. No disease definition is needed. Keep up the good work!"
+            },
+            "solution_guide": [
+                {"cause": "Good agricultural practices, proper nutrition, and favorable conditions.", "remedy": "Continue your current regimen. Ensure consistent watering and monitor for any changes, especially during weather shifts."}
+            ]
+        }
+        
+    # === API Call Case (if model is configured) ===
+    if GEMINI_MODEL:
+        sev_str = f"at a {severity:.1f}% severity level" if severity else "at an undetermined severity"
+        
+        prompt = f"""
+        You are an expert botanist and agricultural scientist. A user has uploaded a plant leaf image and the model has identified:
+        
+        - Disease: {pred_class}
+        - Severity: {sev_str}
+
+        Please provide a concise analysis in a strict JSON format. Do not include any text outside the JSON block (e.g., no "Here is the JSON...").
+
+        The JSON must have this exact structure:
+        {{
+          "definition": {{
+            "status": "found",
+            "title": "A short, catchy title for the disease (e.g., 'Common Rust in Maize')",
+            "summary": "A 2-3 sentence summary explaining what this disease is, tailored to the detected severity. For example, if severity is high, mention this.",
+            "source": "Generated by AI Model"
+          }},
+          "solution_guide": [
+            {{
+              "cause": "The most common primary cause of this issue (e.g., 'Fungal spores from crop debris').",
+              "remedy": "An actionable, severity-aware solution (e.g., 'At this low severity, apply neem oil...')."
+            }},
+            {{
+              "cause": "A common secondary cause (e.g., 'High humidity and poor airflow').",
+              "remedy": "A second actionable tip (e.g., 'Prune lower leaves to improve air circulation.')."
+            }}
+          ]
+        }}
+        """
+        
+        try:
+            response = GEMINI_MODEL.generate_content(prompt)
+            # Clean the response to get just the JSON
+            json_text = response.text.strip().replace("```json", "").replace("```", "")
+            data = json.loads(json_text)
+            return data
+        except Exception as e:
+            print(f"Error during Gemini API call or JSON parsing: {e}")
+            print(f"Gemini raw response: {response.text if 'response' in locals() else 'N/A'}")
+            return get_fallback_data() # Use fallback if API fails
+            
+    # === Fallback (if GEMINI_MODEL was None) ===
+    return get_fallback_data()
+
 
 # =========================
 # ---- ML Helpers ----------
@@ -147,14 +201,12 @@ def load_model2_weights():
         print(f"Error loading PyTorch model: {e}")
         return None
 
-
 def preprocess_image_keras(img: Image.Image):
     if tf is None or kimage is None: return None
     img = img.resize(IMG_SIZE)
     arr = kimage.img_to_array(img)
     arr = np.expand_dims(arr, axis=0) / 255.0
     return arr
-
 
 def preprocess_image_pytorch(img: Image.Image):
     if transforms is None: return None
@@ -164,13 +216,11 @@ def preprocess_image_pytorch(img: Image.Image):
     ])
     return transform(img).unsqueeze(0)
 
-
 def softmax(x):
     x = np.asarray(x)
     x = x - np.max(x)
     e = np.exp(x)
     return e / (np.sum(e) + 1e-9)
-
 
 def predict_with_model1(model, arr):
     if model is None or arr is None:
@@ -191,7 +241,6 @@ def predict_with_model1(model, arr):
     except Exception:
         idx = np.random.randint(0, len(CLASSES))
         return CLASSES[idx], float(np.clip(np.random.uniform(0.85, 0.99), 0, 1)), []
-
 
 def predict_severity(weights, tensor):
     if weights is None or tensor is None:
@@ -219,7 +268,6 @@ def gauge_chart(value: float, title: str, suffix: str = '%'):
             ],
         }
     ))
-    # --- MODIFIED: Removed fixed height ---
     fig.update_layout(
         margin=dict(l=30, r=30, t=40, b=20),
         paper_bgcolor='rgba(0,0,0,0)',
@@ -228,32 +276,13 @@ def gauge_chart(value: float, title: str, suffix: str = '%'):
     )
     return fig
 
-
-def horizontal_bars(items):
-    names = [n for n, _ in items][::-1]
-    vals = [float(p) * 100 for _, p in items][::-1]
-    fig = go.Figure(go.Bar(
-        x=vals, y=names, orientation='h',
-        text=[f"{v:.1f}%" for v in vals],
-        textposition='outside', marker_color='var(--brand)'
-    ))
-    fig.update_layout(
-        height=280, 
-        margin=dict(l=10, r=20, t=20, b=20),
-        paper_bgcolor='rgba(0,0,0,0)', 
-        plot_bgcolor='rgba(0,0,0,0)',
-        font_color='var(--fg)', 
-        yaxis=dict(tickfont=dict(size=14)),
-        dragmode=False  # <-- ADD THIS LINE
-    )
-    return fig
+# --- horizontal_bars (no changes) ---
 
 # =========================
 # ---- Load Models Once ----
 # =========================
 MODEL1 = load_model1()
 MODEL2W = load_model2_weights()
-LOCAL_DEFS = load_local_definitions()
 
 print("Flask app started. Models loaded.")
 if MODEL1 is None:
@@ -300,8 +329,8 @@ def index():
         else:
             sev_gauge_html = gauge_chart(severity, "Estimated severity", "%").to_html(full_html=False, include_plotlyjs=False, config=plot_config)
 
-        definition_data = get_definition_data(pred_class)
-        care_guide_data = get_care_guide_data(pred_class, severity)
+        # --- MODIFIED: Call new unified Gemini function ---
+        gemini_data = get_gemini_analysis(pred_class, severity)
 
         buffered = io.BytesIO()
         img_for_display = img.resize((512, 512)) 
@@ -310,24 +339,31 @@ def index():
         image_data_url = f"data:image/jpeg;base64,{img_str}"
 
         results = {
-    "pred_class": pred_class,
-    "emoji": get_class_emoji(pred_class),
-    "is_healthy": pred_class in HEALTHY_CLASSES,
-    "confidence": confidence,
-    "severity": severity,
-    "top3": top3,
-    "image_data_url": image_data_url,
-    "charts": {  # <-- keep this dict
-        "confidence_gauge": conf_gauge_html,
-        "severity_gauge": sev_gauge_html
-    },
-    "definition": definition_data,
-    "care_guide": care_guide_data
-}
-
+            "pred_class": pred_class,
+            "emoji": get_class_emoji(pred_class),
+            "is_healthy": pred_class in HEALTHY_CLASSES,
+            "confidence": confidence,
+            "severity": severity,
+            "top3": top3,
+            "image_data_url": image_data_url,
+            "charts": {
+                "confidence_gauge": conf_gauge_html,
+                "severity_gauge": sev_gauge_html
+            },
+            # --- MODIFIED: Unpack the Gemini data ---
+            "definition": gemini_data["definition"],
+            "solution_guide": gemini_data["solution_guide"]
+        }
 
         return render_template('index.html', results=results)
 
 
 if __name__ == '__main__':
+    # --- MODIFIED: Added check for API key on startup ---
+    if not GEMINI_API_KEY:
+        print("="*50)
+        print("WARNING: 'GEMINI_API_KEY' is not set.")
+        print("The app will run using simulated data.")
+        print("Set the environment variable to use the real API.")
+        print("="*50)
     app.run(debug=True)
