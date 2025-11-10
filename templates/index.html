@@ -155,6 +155,7 @@
 
   <script>
     (function () {
+      // --- Plotly chart resizing logic (existing) ---
       function triggerResize() {
         if (window.Plotly && document.querySelectorAll('.plotly-graph-div').length) {
           document.querySelectorAll('.plotly-graph-div').forEach(function (el) {
@@ -169,6 +170,29 @@
           setTimeout(triggerResize, 50);
         }
       });
+      
+      // --- NEW: File input indicator logic ---
+      var fileInput = document.getElementById('plant_image');
+      var fileLabel = document.querySelector('.file-input-label');
+      
+      if (fileInput && fileLabel) {
+        var defaultLabelText = fileLabel.innerHTML; // Store original text
+
+        fileInput.addEventListener('change', function(e) {
+          if (e.target.files && e.target.files.length > 0) {
+            // A file was selected
+            var fileName = e.target.files[0].name;
+            fileLabel.innerHTML = '✅ ' + fileName; // Update text with file name
+            fileLabel.classList.add('filled');      // Add 'filled' class for styling
+          } else {
+            // No file selected (e.g., user clicked cancel)
+            fileLabel.innerHTML = defaultLabelText;
+            fileLabel.classList.remove('filled');
+          }
+        });
+      }
+      // --- End of new logic ---
+
     })();
   </script>
 </body>

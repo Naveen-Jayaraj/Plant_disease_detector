@@ -164,6 +164,12 @@ body {
   font-weight: 700; color: var(--accent-fg); /* White label */
   opacity: 0.95; pointer-events: none;
   border-radius: var(--r-md);
+  transition: color .2s ease; /* <-- MODIFIED */
+}
+
+/* --- NEW RULE --- */
+.file-input-label.filled {
+  color: var(--brand); /* Bright green text */
 }
 
 /* --- MODIFIED: Bright Buttons --- */
