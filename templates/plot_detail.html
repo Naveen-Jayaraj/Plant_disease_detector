@@ -39,6 +39,38 @@
     </form>
   </div>
 
+  <div class="card" style="padding: var(--space-4); margin-bottom: var(--space-4);">
+    <h3>📓 Plot Journal</h3>
+    <form action="{{ url_for('add_note', plot_id=plot.id) }}" method="POST">
+      <div style="margin-bottom: var(--space-3);">
+        <textarea name="note_content" rows="3" 
+                  placeholder="Log an observation (e.g., 'Planted seeds today', 'Noticed first flowering')..."
+                  style="width: 100%; padding: var(--space-2); border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--bg-3); color: var(--fg); font-size: 1rem;"></textarea>
+      </div>
+      <div style="text-align: right;">
+        <button type="submit" class="submit-button" style="padding: 10px 18px; font-size: 15px;">Save Note</button>
+      </div>
+    </form>
+    
+    <div class="divider"></div>
+    
+    <h3 style="font-size: 1.1rem; color: var(--muted); margin-bottom: 0;">📋 Logged Notes</h3>
+    {% if plot.notes %}
+      <ul class="task-list">
+        {% for note in plot.notes %}
+          <li style="align-items: start; gap: var(--space-3);">
+            <div style="font-size: 0.9rem; color: var(--muted); text-align: right; min-width: 60px;">
+              <strong>{{ note.timestamp.strftime('%b %d') }}</strong><br>
+              <small>{{ note.timestamp.strftime('%Y') }}</small>
+            </div>
+            <div style="padding-top: 4px;">{{ note.content }}</div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="def-info" style="font-size: 0.9rem; margin-top: var(--space-3);">No notes logged for this plot yet.</p>
+    {% endif %}
+  </div>
   <div class="plot-graph-grid">
     <div class="card" style="padding: var(--space-4);">
       <h3>Plot Health Graph</h3>

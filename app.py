@@ -105,6 +105,8 @@ class User(UserMixin, db.Model):
     scans = db.relationship('ScanHistory', backref='user', lazy=True)
     plots = db.relationship('Plot', backref='owner', lazy=True)
     tasks = db.relationship('Task', backref='owner', lazy=True)
+    # NEW: Relationship for Inventory
+    resources = db.relationship('Resource', backref='owner', lazy=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -120,7 +122,6 @@ class Plot(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     scans = db.relationship('ScanHistory', backref='plot', lazy=True)
     
-    # --- NEW MANAGEMENT FIELDS ---
     irrigation_frequency_days = db.Column(db.Integer, nullable=True)
     fertilization_frequency_days = db.Column(db.Integer, nullable=True)
     preferred_fertilizer = db.Column(db.String(100), nullable=True)
@@ -131,7 +132,6 @@ class Task(db.Model):
     scan_id = db.Column(db.Integer, db.ForeignKey('scan_history.id'), nullable=True)
     plot_id = db.Column(db.Integer, db.ForeignKey('plot.id'), nullable=True)
     
-    # --- NEW: Task Type and Date ---
     task_type = db.Column(db.String(50), default='general') # 'general', 'irrigation', 'fertilization', 'treatment'
     title = db.Column(db.String(200), nullable=False)
     due_date = db.Column(db.Date, nullable=False) # Changed to Date for daily tasks
@@ -160,6 +160,24 @@ class ScanHistory(db.Model):
     solution_json = db.Column(db.Text)
     fertilizer_json = db.Column(db.Text)
     top3_json = db.Column(db.Text)
+
+# --- NEW: Plot Journal Model ---
+class PlotNote(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    plot_id = db.Column(db.Integer, db.ForeignKey('plot.id'), nullable=False)
+    
+    # Establishes the relationship, so you can do plot.notes
+    plot = db.relationship('Plot', backref=db.backref('notes', lazy=True, order_by=timestamp.desc()))
+
+# --- NEW: Resource/Inventory Model ---
+class Resource(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(200), nullable=False)
+    category = db.Column(db.String(50), nullable=False) # 'Fertilizer', 'Pesticide', 'Seed', 'Other'
+    quantity = db.Column(db.String(100)) # Using String for "5 bags", "2.5L", "Low"
 
 # =========================
 # ---- User Loader -------
@@ -243,17 +261,11 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-# --- NEW: Task Generation Utility ---
 def update_recurring_tasks(user_id):
-    """
-    Generates new recurring irrigation and fertilization tasks.
-    Runs on every dashboard load.
-    """
     today = datetime.utcnow().date()
     plots = Plot.query.filter_by(user_id=user_id).all()
     
     for plot in plots:
-        # --- 1. Check Irrigation ---
         if plot.irrigation_frequency_days:
             task_type = 'irrigation'
             title = f"Irrigate {plot.name}"
@@ -261,21 +273,17 @@ def update_recurring_tasks(user_id):
             
             next_due_date = None
             if last_task is None:
-                next_due_date = today # No task ever, create one for today
+                next_due_date = today 
             else:
-                # Get the *next* scheduled date after the last one
                 next_due_date = last_task.due_date + timedelta(days=plot.irrigation_frequency_days)
             
-            # Create all tasks from the next_due_date up to today
             while next_due_date and next_due_date <= today:
-                # Check if a task for this date *already exists* (to prevent duplicates)
                 existing = Task.query.filter_by(plot_id=plot.id, task_type=task_type, due_date=next_due_date).first()
                 if not existing:
                     new_task = Task(user_id=user_id, plot_id=plot.id, task_type=task_type, title=title, due_date=next_due_date)
                     db.session.add(new_task)
                 next_due_date += timedelta(days=plot.irrigation_frequency_days)
 
-        # --- 2. Check Fertilization ---
         if plot.fertilization_frequency_days:
             task_type = 'fertilization'
             title = f"Fertilize {plot.name} ({plot.preferred_fertilizer or 'N/A'})"
@@ -333,7 +341,6 @@ def get_gemini_info(pred_class: str, severity: float = None):
     if GEMINI_MODEL:
         sev_str = f"at a {severity:.1f}% severity level" if severity else "at an undetermined severity"
         
-        # --- MODIFIED PROMPT ---
         prompt = f"""
         You are an expert botanist. A user has identified:
         - Disease: {pred_class}
@@ -355,7 +362,6 @@ def get_gemini_info(pred_class: str, severity: float = None):
           ]
         }}
         """
-        # --- END MODIFIED PROMPT ---
         
         try:
             response = GEMINI_MODEL.generate_content(prompt)
@@ -374,7 +380,6 @@ def get_gemini_info(pred_class: str, severity: float = None):
             
     return get_fallback_data()
 
-# ... (predict_with_gemini, load_model2_weights, preprocess_image_pytorch, predict_severity are unchanged) ...
 def predict_with_gemini(img: Image.Image):
     def get_fallback_prediction():
         print("Using fallback data for prediction.")
@@ -417,7 +422,6 @@ def predict_severity(weights, tensor):
 # ---- Graphics -------------
 # =========================
 
-# ... (gauge_chart, horizontal_bar_chart, create_plot_health_chart are unchanged) ...
 def gauge_chart(value: float, title: str, suffix: str = '%'):
     color = "var(--brand)" if value < 30 else ("var(--warn)" if value < 70 else "var(--danger)")
     fig = go.Figure(go.Indicator(
@@ -450,23 +454,24 @@ def create_plot_health_chart(scans):
     fig.update_layout(title="Plot Health Over Time (Severity %)", xaxis_title="Scan Date", yaxis_title="Severity %", yaxis_range=[0, 100], margin=dict(l=40, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='var(--fg)')
     return fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-# --- NEW: Event Timeline Graph ---
 def create_plot_event_timeline(plot_id):
-    """
-    Creates a scatter plot of all management events for a plot.
-    """
     scans = ScanHistory.query.filter_by(plot_id=plot_id, is_healthy=False).all()
     tasks = Task.query.filter_by(plot_id=plot_id, is_complete=True).all()
+    # NEW: Query for plot notes
+    notes = PlotNote.query.filter_by(plot_id=plot_id).all()
 
     scan_dates = [s.timestamp.date() for s in scans]
     scan_names = [s.pred_class for s in scans]
     
     irrigation_dates = [t.due_date for t in tasks if t.task_type == 'irrigation']
     fertilization_dates = [t.due_date for t in tasks if t.task_type == 'fertilization']
+    
+    # NEW: Get dates for notes
+    note_dates = [n.timestamp.date() for n in notes]
+    note_contents = [n.content for n in notes]
 
     fig = go.Figure()
     
-    # Add traces if data exists
     if scan_dates:
         fig.add_trace(go.Scatter(
             x=scan_dates, y=[1] * len(scan_dates),
@@ -486,8 +491,16 @@ def create_plot_event_timeline(plot_id):
             mode='markers', name='Fertilization Event',
             marker=dict(color='var(--brand)', size=12, symbol='diamond')
         ))
+        
+    # NEW: Add notes to timeline
+    if note_dates:
+        fig.add_trace(go.Scatter(
+            x=note_dates, y=[0] * len(note_dates),
+            mode='markers', name='Journal Note',
+            text=note_contents,
+            marker=dict(color='var(--warn)', size=12, symbol='star')
+        ))
 
-    # Check if any data was added
     if not fig.data:
         fig.update_layout(title="No Management Events Logged Yet")
     else:
@@ -500,7 +513,7 @@ def create_plot_event_timeline(plot_id):
         margin=dict(l=40, r=20, t=40, b=20),
         yaxis=dict(
             showticklabels=False,
-            range=[0, 4] # Creates space
+            range=[-1, 4] # Updated range for notes
         ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
@@ -592,7 +605,10 @@ def get_weather():
     lat = request.args.get('lat'); lon = request.args.get('lon')
     if not lat or not lon:
         return jsonify({"error": "Missing coordinates"}), 400
+    
+    # --- FIX: Added https:// ---
     url = "https://api.open-meteo.com/v1/forecast"
+    
     params = {
         'latitude': lat, 'longitude': lon,
         'current': 'temperature_2m,weather_code',
@@ -621,12 +637,10 @@ def get_weather():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    # --- RUNS THE NEW TASK GENERATOR ---
     update_recurring_tasks(current_user.id)
 
     plots = Plot.query.filter_by(user_id=current_user.id).order_by(Plot.name).all()
     
-    # --- MODIFIED: Query for tasks based on Date ---
     today = datetime.utcnow().date()
     
     tasks_today = Task.query.filter(
@@ -707,8 +721,7 @@ def plot_detail(plot_id):
     
     scans = ScanHistory.query.filter_by(plot_id=plot.id).order_by(ScanHistory.timestamp.desc()).all()
     
-    # --- NEW: Generate both graphs ---
-    health_chart_html = create_plot_health_chart(scans[::-1]) # Pass oldest-to-newest
+    health_chart_html = create_plot_health_chart(scans[::-1]) 
     event_timeline_html = create_plot_event_timeline(plot_id)
     
     return render_template('plot_detail.html', 
@@ -717,7 +730,6 @@ def plot_detail(plot_id):
                            health_chart_html=health_chart_html,
                            event_timeline_html=event_timeline_html)
 
-# --- NEW: Route for Irrigation/Fertilization ---
 @app.route('/plot/set_management/<int:plot_id>', methods=['POST'])
 @login_required
 def set_management(plot_id):
@@ -742,6 +754,25 @@ def set_management(plot_id):
         
     return redirect(url_for('plot_detail', plot_id=plot_id))
 
+# --- NEW: Plot Journal Note Route ---
+@app.route('/plot/<int:plot_id>/add_note', methods=['POST'])
+@login_required
+def add_note(plot_id):
+    plot = Plot.query.get_or_404(plot_id)
+    if plot.user_id != current_user.id:
+        abort(403)
+    
+    content = request.form.get('note_content')
+    if content:
+        new_note = PlotNote(content=content, plot_id=plot.id)
+        db.session.add(new_note)
+        db.session.commit()
+        flash('Note added successfully!', 'success')
+    else:
+        flash('Note content cannot be empty.', 'danger')
+    
+    return redirect(url_for('plot_detail', plot_id=plot_id))
+
 # =========================
 # ---- Task Routes ---
 # =========================
@@ -752,9 +783,6 @@ def create_task_from_scan(scan_id):
     if scan.user_id != current_user.id:
         abort(403)
     
-    # This is a one-off. Let's just create one task for tomorrow.
-    # The full plan is auto-added in the /scan route.
-    # This button can be a "Set Manual Reminder"
     try:
         solution_guide = json.loads(scan.solution_json)
         remedy = solution_guide[0]['remedy']
@@ -811,7 +839,6 @@ def scan():
         flash("No file selected.", 'warning')
         return render_template('scan.html', results=None, plots=plots)
     
-    # --- MODIFICATION: Require and Validate Plot ID ---
     plot_id = request.form.get('plot_id')
     if not plot_id:
         flash("You must select a plot to assign this scan to.", 'danger')
@@ -827,7 +854,6 @@ def scan():
         print(f"Error validating plot: {e}")
         flash("Invalid plot ID.", 'danger')
         return render_template('scan.html', results=None, plots=plots, error="Invalid plot ID.")
-    # --- END MODIFICATION ---
 
     scan_lat = current_user.latitude; scan_lon = current_user.longitude
 
@@ -878,7 +904,6 @@ def scan():
         db.session.add(new_scan); db.session.commit()
         scan_id_for_template = new_scan.id
 
-        # --- NEW: AUTO-CREATE TASKS FROM TREATMENT PLAN ---
         treatment_plan = gemini_data.get('treatment_plan', [])
         if treatment_plan and not new_scan.is_healthy:
             today = datetime.utcnow().date()
@@ -887,7 +912,6 @@ def scan():
                 task_title = item.get('task', 'Follow-up on scan')
                 due_date = today + timedelta(days=task_day - 1)
                 
-                # Check if this exact task already exists
                 existing = Task.query.filter_by(scan_id=new_scan.id, title=task_title, due_date=due_date).first()
                 if not existing:
                     new_task = Task(
@@ -897,7 +921,6 @@ def scan():
                     )
                     db.session.add(new_task)
             db.session.commit()
-        # --- END NEW ---
 
     except Exception as e:
         db.session.rollback(); print(f"Error saving to database: {e}")
@@ -916,7 +939,7 @@ def scan():
         "definition": gemini_data["definition"],
         "solution_guide": gemini_data["solution_guide"],
         "fertilizer": gemini_data.get("fertilizer_recommendation"),
-        "treatment_plan": gemini_data.get('treatment_plan', []) # Pass to template
+        "treatment_plan": gemini_data.get('treatment_plan', [])
     }
     return render_template('scan.html', results=results, plots=plots)
 
@@ -948,7 +971,6 @@ def scan_detail(scan_id):
         definition_data = json.loads(scan.definition_json)
         solution_data = json.loads(scan.solution_json)
         fertilizer_data = json.loads(scan.fertilizer_json)
-        # --- NEW: Load treatment plan ---
         treatment_plan = json.loads(scan.tasks.first().scan.definition_json).get('treatment_plan', []) if scan.tasks else []
     except:
         definition_data = {"status": "info", "message": "Error loading data."}; solution_data = []
@@ -968,6 +990,91 @@ def scan_detail(scan_id):
         "fertilizer": fertilizer_data, "treatment_plan": treatment_plan
     }
     return render_template('scan.html', results=results, from_history=True)
+
+# =========================
+# ---- NEW: Analytics & Inventory Routes ----
+# =========================
+
+@app.route('/analytics')
+@login_required
+def analytics():
+    # Query 1: Most common diseases (top 5)
+    most_common_diseases = db.session.query(
+        ScanHistory.pred_class, func.count(ScanHistory.id).label('count')
+    ).filter(
+        ScanHistory.user_id == current_user.id,
+        ScanHistory.is_healthy == False
+    ).group_by(ScanHistory.pred_class).order_by(
+        func.count(ScanHistory.id).desc()
+    ).limit(5).all()
+
+    # Query 2: Task completion stats
+    completed_tasks = db.session.query(
+        Task.task_type, func.count(Task.id).label('count')
+    ).filter(
+        Task.user_id == current_user.id,
+        Task.is_complete == True
+    ).group_by(Task.task_type).all()
+    
+    # Query 3: Plot health overview
+    plots = Plot.query.filter_by(user_id=current_user.id).all()
+    plot_health = []
+    for plot in plots:
+        last_scan = ScanHistory.query.filter_by(plot_id=plot.id).order_by(ScanHistory.timestamp.desc()).first()
+        health_status = "No Scans"
+        health_class = "info"
+        if last_scan:
+            if last_scan.is_healthy:
+                health_status = "Healthy"
+                health_class = "good"
+            else:
+                health_status = f"{last_scan.pred_class} ({last_scan.severity:.0f}%)"
+                health_class = "bad"
+        plot_health.append({"plot": plot, "status": health_status, "class": health_class})
+
+    return render_template('analytics.html',
+                           disease_stats=most_common_diseases,
+                           task_stats=completed_tasks,
+                           plot_health=plot_health)
+
+@app.route('/inventory', methods=['GET', 'POST'])
+@login_required
+def inventory():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        category = request.form.get('category')
+        quantity = request.form.get('quantity')
+        
+        if name and category:
+            new_resource = Resource(
+                user_id=current_user.id,
+                name=name,
+                category=category,
+                quantity=quantity
+            )
+            db.session.add(new_resource)
+            db.session.commit()
+            flash('Resource added to inventory.', 'success')
+        else:
+            flash('Resource Name and Category are required.', 'danger')
+        return redirect(url_for('inventory'))
+
+    # GET request: Load all resources
+    resources = Resource.query.filter_by(user_id=current_user.id).order_by(Resource.category).all()
+    return render_template('inventory.html', resources=resources)
+
+@app.route('/inventory/delete/<int:resource_id>', methods=['POST'])
+@login_required
+def delete_resource(resource_id):
+    resource = Resource.query.get_or_404(resource_id)
+    if resource.user_id != current_user.id:
+        abort(403)
+    
+    db.session.delete(resource)
+    db.session.commit()
+    flash('Resource removed from inventory.', 'success')
+    return redirect(url_for('inventory'))
+
 
 # =========================
 # ---- Main Run Block ----

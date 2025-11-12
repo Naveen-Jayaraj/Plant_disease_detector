@@ -23,7 +23,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      height: 60px;
+      height: 70px; /* MOD: Increased from 60px */
     }
     .navbar-brand {
       font-family: 'Poppins', system-ui;
@@ -34,7 +34,7 @@
     }
     .navbar-nav {
       display: flex;
-      gap: var(--space-3);
+      gap: var(--space-4); /* MOD: Increased from var(--space-3) */
       align-items: center;
     }
     .navbar-nav a {
@@ -43,6 +43,7 @@
       font-weight: 700;
       font-size: 0.9rem;
       transition: color .2s ease;
+      padding: 8px 0; /* MOD: Added vertical padding */
     }
     .navbar-nav a:hover { color: var(--fg); }
     .navbar-nav .nav-user { color: var(--fg); }
@@ -85,6 +86,8 @@
           <a href="{{ url_for('dashboard') }}">Dashboard</a>
           <a href="{{ url_for('scan') }}">New Scan</a>
           <a href="{{ url_for('history') }}">History</a>
+          <a href="{{ url_for('analytics') }}">Analytics</a>
+          <a href="{{ url_for('inventory') }}">Inventory</a>
           <a href="{{ url_for('logout') }}">Logout</a>
         {% else %}
           <a href="{{ url_for('login') }}">Login</a>

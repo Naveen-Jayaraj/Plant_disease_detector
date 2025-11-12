@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Farm Analytics - {{ super() }}{% endblock %}
+
+{% block content %}
+<div class="main-container">
+  <div class="hero">
+    <div class="hero-title">📊 Farm-Wide Analytics</div>
+    <p class="hero-subtitle">Your entire farm's health at a glance.</p>
+  </div>
+
+  <div class="dashboard-grid">
+
+    <div class="card dashboard-widget">
+      <h3>🚜 Plot Health Overview</h3>
+      <ul class="plot-list">
+      {% for item in plot_health %}
+        <li>
+          <a href="{{ url_for('plot_detail', plot_id=item.plot.id) }}">
+            <strong>{{ item.plot.name }}</strong>
+            <small>
+              Status: 
+              {% if item.class == 'good' %}
+                <span class="badge-caption badge-good" style="margin-top: 0; font-size: 11px;">
+                  {{ item.status }}
+                </span>
+              {% elif item.class == 'bad' %}
+                <span class="badge-caption badge-bad" style="margin-top: 0; font-size: 11px;">
+                  {{ item.status }}
+                </span>
+              {% else %}
+                <span class="badge-caption badge-mid" style="margin-top: 0; font-size: 11px; background: var(--bg-3); color: var(--muted);">
+                  {{ item.status }}
+                </span>
+              {% endif %}
+            </small>
+          </a>
+        </li>
+      {% else %}
+        <p class="def-info" style="margin: auto 0;">No plots created yet.</p>
+      {% endfor %}
+      </ul>
+    </div>
+
+    <div class="card dashboard-widget">
+      <h3>⚠️ Most Common Diseases</h3>
+      {% if disease_stats %}
+        <ul class="task-list">
+          {% for disease in disease_stats %}
+            <li style="gap: var(--space-3);">
+              <span class="collapsible-summary-count">{{ disease.count }}</span>
+              <div>
+                <strong>{{ disease.pred_class }}</strong>
+                <small>Total Detections</small>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="def-info" style="margin: auto 0;">No disease data recorded yet.</p>
+      {% endif %}
+    </div>
+    
+    <div class="card dashboard-widget">
+      <h3>📈 Completed Task Stats</h3>
+      {% if task_stats %}
+        <ul class="task-list">
+          {% for task in task_stats %}
+            <li style="gap: var(--space-3);">
+              <span class="collapsible-summary-count">{{ task.count }}</span>
+              <div>
+                <strong>{{ task.task_type.capitalize() }}</strong>
+                <small>Tasks Completed</small>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="def-info" style="margin: auto 0;">No tasks completed yet.</p>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+{% endblock %}
